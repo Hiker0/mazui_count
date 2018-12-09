@@ -1,4 +1,6 @@
 venv
 .~lock.*
 *.xlsx
+*.xls
 .idea/
+*.pyc

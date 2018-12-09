@@ -6,6 +6,8 @@ import sys
 import numpy as np
 import argparse
 import pandas as pd
+import util
+import configparser
 
 reload(sys)
 sys.setdefaultencoding( "utf-8" )
@@ -15,7 +17,7 @@ SRC2_ALLOW_OPTPYE=[u'日间眼科局监',u'2#眼科局监',u'日间人流',u'无
 PACU_ALLOW_OPTPYE=[u'麻醉门诊',u'复苏室']
 
 ALLOW_LOCATION=[u'大手术室',u'胃肠镜全麻',u'气管镜',u'日间',u'DSA',u'关节复位',u'双镜',u'抢救插管']
-DOCTOR_ALIAS = {u'刑怡安':u'邢怡安',u'＊':u'', u'*':'',u',':u'，'}
+DOCTOR_ALIAS = {u'刑怡安':u'邢怡安',u'王晓丽':u'王晓莉',u'沈皓':u'沈浩',u'＊':u'*', u',':u'，'}
 
 
 DEBUG=1
@@ -41,6 +43,8 @@ def read_csv(database):
 def calculate_oneday_percentage(src1_day_df, src2_day_df,pacu_day_df, perc_df):
     #print perc_df
     weichangjing_num = 0
+    src1_day_df = util.dataframe_replace(src1_day_df.copy(),[u'麻1（主麻）',u'麻2（副麻）',u'麻3（接班主麻）',u'麻4（接班副麻）'],{u'*':''})
+
     for index,row in src1_day_df.iterrows():
         date = row[u'日期']
         op_type = row[u'麻醉类型']
@@ -198,7 +202,7 @@ def calculate_percentage():
         types.append(row["doctor_type"])
 
     num = len(docs)
-    huizong_df = pd.DataFrame({u'名字': docs, u'日均':np.zeros(num)})
+    huizong_df = pd.DataFrame({u'名字': docs,u'医生类型': types})
 
     for day in days_list:
         src1_day_df = src1_df[src1_df[u"日期"]==day]
@@ -227,10 +231,13 @@ def calculate_percentage():
 
         day_result = calculate_oneday_percentage(src1_day_df, src2_day_df, pacu_day_df, perc_df)
         sheet = str(day).split()[0]
+
+        jintie = day_result[u'津贴']
+        huizong_df[sheet]=jintie.tolist()
         day_result.to_excel(writer, sheet)
-        
 
-
+    huizong_df.set_index(u'名字')
+    huizong_df.to_excel(writer, u'月汇总')
     writer.save()
 
     print "提成计算完成：　提成.xlsx"
@@ -238,7 +245,7 @@ def calculate_percentage():
 
 def src1_check():
     '''检查大帐单一'''
-    global src1_df
+    global src1_df,zhiban_dict
     success = 1
     print "检查大帐单一 ..."
 
@@ -249,10 +256,27 @@ def src1_check():
         op_type = row[u'麻醉类型']
         op_location = row[u'请选择手术地点']
         main_doctor = row[u'麻1（主麻）']
+        total_doc = []
+        if pd.notnull(main_doctor):
+            main_doctor=main_doctor.replace(u'*','')
+            total_doc.extend(re.split(u'[ ，]', main_doctor))
         assistant_doctor = row[u'麻2（副麻）']
+        if pd.notnull(assistant_doctor):
+            assistant_doctor=assistant_doctor.replace(u'*', '')
+            total_doc.extend(re.split(u'[ ，]', assistant_doctor))
         succession_main = row[u'麻3（接班主麻）']
+        if pd.notnull(succession_main):
+            succession_main = succession_main.replace(u'*', '')
+            total_doc.extend(re.split(u'[ ，]', succession_main))
         succession_assistant = row[u'麻4（接班副麻）']
+        if pd.notnull(succession_assistant):
+            succession_assistant = succession_assistant.replace(u'*', '')
+            total_doc.extend(re.split(u'[ ，]', succession_assistant))
+        has_succession = row[u'是否接班']
 
+        if util.list_dubble_item(total_doc):
+            success = 0
+            print series, "重复的麻醉医生", total_doc
         #空行
         if  pd.isnull(date):
             continue
@@ -296,10 +320,15 @@ def src1_check():
             success = 0
             print series,"不识别的麻醉医生：", succession_assistant
 
-        if  pd.notnull(op_type) and (op_location != u'胃肠镜全麻'):
+        if  pd.notnull(op_type) and (op_location != u'胃肠镜全麻') and (op_location != u'DSA'):
             if doctors_dict[main_doctor] == 1 and pd.notnull(assistant_doctor) and doctors_dict[assistant_doctor] == 0:
-                success = 0
-                print series,"主麻副麻登记错误：",main_doctor, assistant_doctor
+                if (main_doctor not in zhiban_dict[date])and (assistant_doctor not in zhiban_dict[date]):
+                    print series,"主麻副麻登记错误：",main_doctor, assistant_doctor
+
+        if has_succession == u'是' and pd.isnull(succession_main) and pd.isnull(succession_assistant):
+            success = 0
+            print series, "接班主麻副麻登记错误：", main_doctor, assistant_doctor
+
 
     if success:
         print "电子大帐１检查通过"
@@ -419,148 +448,98 @@ def database_check():
     res4 = menzhen_check()
 
     if res1 == 0 or res2==0 or res3==0 or res4 == 0:
-        print "数据检查未通过"
-        exit()
+        print "数据检查未通过, 输入　N 退出，　Y 继续．．"
+        flag = 1
+        while flag:
+            command = raw_input('>>')
+            if command == 'y' or command=='Y':
+                return
+            elif command == 'n' or command=='N':
+                exit()
     return
 
 #预处理
 def pre_handler():
-    global src1_df, src2_df, pacu_df
+    global src1_df, src2_df, pacu_df,zhiban_dict
 
     print "－－－－预处理－－－－－－"
     print "处理大帐一"
-    for index, row in src1_df.iterrows():
-        date = row[u'日期']
-        main_doctor = row[u'麻1（主麻）']
-        assistant_doctor = row[u'麻2（副麻）']
-        succession_main = row[u'麻3（接班主麻）']
-        succession_assistant = row[u'麻4（接班副麻）']
 
-        # 空行
-        if pd.isnull(date):
-            src1_df = src1_df.drop([index])
-            continue
+    src1_df = util.dataframe_drop_null(src1_df, u'日期')
+    src1_df = util.dataframe_replace(src1_df,[u'麻1（主麻）',u'麻2（副麻）',u'麻3（接班主麻）',u'麻4（接班副麻）'],DOCTOR_ALIAS)
 
-        if isinstance(main_doctor,unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in main_doctor:
-                    changed = 1
-                    main_doctor = main_doctor.replace(re,DOCTOR_ALIAS[re])
-            if changed:
-                #print row[u'麻1（主麻）']+' -> ' + main_doctor
-                src1_df.loc[index,u'麻1（主麻）'] = main_doctor
+    src2_df = util.dataframe_drop_null(src2_df, u'时间')
+    src2_df = util.dataframe_replace(src2_df, [u'麻1', u'麻2', u'麻3', u'麻4',u'麻5'], DOCTOR_ALIAS)
 
-        if isinstance(assistant_doctor,unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in assistant_doctor:
-                    changed = 1
-                    assistant_doctor = assistant_doctor.replace(re,DOCTOR_ALIAS[re])
-            if changed:
-                #print row[u'麻2（副麻）']+' -> ' + assistant_doctor
-                src1_df.loc[index,u'麻2（副麻）'] = assistant_doctor
+    pacu_df = util.dataframe_drop_null(pacu_df, u'时间')
+    pacu_df = util.dataframe_replace(pacu_df, [u'复苏人员（出诊人员）'], DOCTOR_ALIAS)
 
-        if isinstance(succession_main,unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in succession_main:
-                    changed = 1
-                    succession_main = succession_main.replace(re,DOCTOR_ALIAS[re])
-            if changed:
-                src1_df.loc[index,u'麻3（接班主麻）'] = succession_main
 
-        if isinstance(succession_assistant,unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in succession_assistant:
-                    changed = 1
-                    succession_assistant = succession_assistant.replace(re,DOCTOR_ALIAS[re])
-            if changed:
-                src1_df.loc[index,u'麻4（接班副麻）'] = succession_assistant
 
-    print "处理大帐二"
-    for index, row in src2_df.iterrows():
-        date = row[u'时间']
-        doctor1 = row[u'麻1']
-        doctor2 = row[u'麻2']
-        doctor3 = row[u'麻3']
-        doctor4 = row[u'麻4']
-        doctor5 = row[u'麻5']
+    print '－－－－－获取值班信息－－－'
+    for day in days_list:
+        src1_day_df = src1_df[src1_df[u"日期"] == day]
+        src2_day_df = src2_df[src2_df[u'时间'] == day]
+        doctorlist = []
+        doctors = []
 
-        # 空行
-        if pd.isnull(date):
-            src2_df = src2_df.drop([index])
-            continue
+        for index, row in src1_day_df.iterrows():
+            main_doctor = row[u'麻1（主麻）']
+            assistant_doctor = row[u'麻2（副麻）']
+            succession_main = row[u'麻3（接班主麻）']
+            succession_assistant = row[u'麻4（接班副麻）']
+            if pd.notnull(main_doctor):
+                doctors.extend(re.split(u'[ ，]', main_doctor))
 
-        if isinstance(doctor1, unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in doctor1:
-                    changed = 1
-                    doctor1 = doctor1.replace(re, DOCTOR_ALIAS[re])
-            if changed:
-                src2_df.loc[index, u'麻1'] = doctor1
+            if pd.notnull(assistant_doctor):
+                doctors.extend(re.split(u'[ ，]', assistant_doctor))
 
-        if isinstance(doctor2, unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in doctor2:
-                    changed = 1
-                    doctor2 = doctor2.replace(re, DOCTOR_ALIAS[re])
-            if changed:
-                src2_df.loc[index, u'麻2'] = doctor2
+            if pd.notnull(succession_main):
+                doctors.extend(re.split(u'[ ，]', succession_main))
 
-        if isinstance(doctor3, unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in doctor3:
-                    changed = 1
-                    doctor3 = doctor3.replace(re, DOCTOR_ALIAS[re])
-            if changed:
-                src2_df.loc[index, u'麻3'] = doctor3
+            if pd.notnull(succession_assistant):
+                doctors.extend(re.split(u'[ ，]', succession_assistant))
 
-        if isinstance(doctor4, unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in doctor4:
-                    changed = 1
-                    doctor4 = doctor4.replace(re, DOCTOR_ALIAS[re])
-            if changed:
-                src2_df.loc[index, u'麻4'] = doctor4
-        if isinstance(doctor5, unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in doctor5:
-                    changed = 1
-                    doctor5 = doctor5.replace(re, DOCTOR_ALIAS[re])
-            if changed:
-                src2_df.loc[index, u'麻5'] = doctor5
 
-    print "处理ＰＡＣＵ"
-    for index, row in pacu_df.iterrows():
-        date = row[u'时间']
-        doctor1 = row[u'复苏人员（出诊人员）']
+        for index, row in src2_day_df.iterrows():
+            doctor1 = row[u'麻1']
+            doctor2 = row[u'麻2']
+            doctor3 = row[u'麻3']
+            doctor4 = row[u'麻4']
+            doctor5 = row[u'麻5']
 
-        # 空行
-        if pd.isnull(date):
-            pacu_df = pacu_df.drop([index])
-            continue
+            if pd.notnull(doctor1):
+                doctors.extend(re.split(u'[ ，]', doctor1))
+            if pd.notnull(doctor2):
+                doctors.extend(re.split(u'[ ，]', doctor2))
+            if pd.notnull(doctor3):
+                doctors.extend(re.split(u'[ ，]', doctor3))
+            if pd.notnull(doctor4):
+                doctors.extend(re.split(u'[ ，]', doctor4))
+            if pd.notnull(doctor5):
+                doctors.extend(re.split(u'[ ，]', doctor5))
 
-        if isinstance(doctor1, unicode):
-            changed = 0
-            for re in DOCTOR_ALIAS.keys():
-                if re in doctor1:
-                    changed = 1
-                    doctor1 = doctor1.replace(re, DOCTOR_ALIAS[re])
-            if changed:
-                pacu_df.loc[index, u'复苏人员（出诊人员）'] = doctor1
+        str=''
+        for doc in doctors:
+            if (u'*' in doc):
+                d = doc.replace(u'*','')
+                if d not in doctorlist:
+                    doctorlist.append(d)
+                    str= d+' '+str
+        print day, str
+        zhiban_dict[day] = doctorlist
+
+    #src1_df = util.dataframe_replace(src1_df,[u'麻1（主麻）',u'麻2（副麻）',u'麻3（接班主麻）',u'麻4（接班副麻）'],{u'*':''})
+    src2_df = util.dataframe_replace(src2_df, [u'麻1', u'麻2', u'麻3', u'麻4',u'麻5'], {u'*':''})
+    pacu_df = util.dataframe_replace(pacu_df, [u'复苏人员（出诊人员）'], {u'*':''})
+
     return
 
 
 #获取值班信息
 def getDutyInfo():
     global menzhen_dict
+
     print '－－－－－获取门诊值班信息－－－'
     for index, row in pacu_df.iterrows():
         date = row[u'时间']
@@ -610,10 +589,15 @@ def main(src1,src2,pacu,doctors_list):
 
 if __name__ == '__main__':
 
-    src1 = "11月麻醉电子大账（一）_20181123225156.xlsx"
-    src2 = "11月麻醉电子大账（二)_20181123224256.xlsx"
-    pacu = "11月PACU与麻醉门诊登记_20181123224239.xlsx"
-    doctors_list = "doctor_list.csv"
+    conf = configparser.ConfigParser()
+    conf.read("config.ini")
+
+    src1 = conf.get("path","src1")
+    src2 = conf.get("path","src2")
+    pacu = conf.get("path","pacu")
+    doctors_list = conf.get("path","doctors_list")
+
+    month =  conf.get("config","month")
 
     subsidies = "科室补贴(新新).xls"
     percentage = "2018.手术提成+(1).xls"
