@@ -26,7 +26,7 @@ menzhen_dict = dict()
 zhiban_dict = dict()
 
 days_list=list()
-global src1_df, src2_df, pacu_df, doctors_df
+global src1_df, src2_df, pacu_df, doctors_df, month
 
 def read_excel(database):
     print "read excel:"+database
@@ -202,9 +202,13 @@ def calculate_percentage():
         types.append(row["doctor_type"])
 
     num = len(docs)
-    huizong_df = pd.DataFrame({u'名字': docs,u'医生类型': types})
+    huizong_df = pd.DataFrame({u'名字': docs},columns=[u'名字'])
 
     for day in days_list:
+        mytime = pd.to_datetime(day)
+
+        datestr = mytime.day
+
         src1_day_df = src1_df[src1_df[u"日期"]==day]
         src2_day_df = src2_df[src2_df[u'时间'] == day]
         pacu_day_df = pacu_df[pacu_df[u'时间'] == day]
@@ -233,10 +237,11 @@ def calculate_percentage():
         sheet = str(day).split()[0]
 
         jintie = day_result[u'津贴']
-        huizong_df[sheet]=jintie.tolist()
+        huizong_df[datestr]=jintie.tolist()
         day_result.to_excel(writer, sheet)
 
     huizong_df.set_index(u'名字')
+    huizong_df[u'月总计'] = huizong_df.sum( axis=1)
     huizong_df.to_excel(writer, u'月汇总')
     writer.save()
 
@@ -567,19 +572,35 @@ def main(src1,src2,pacu,doctors_list):
 
     #统计日期
     for index,row in src1_df.iterrows():
-        date = row[u'日期']
-        if (not days_list.__contains__(date)) and (pd.notnull(date)):
-            days_list.append(date)
+        timestamp = row[u'日期']
+        if (pd.notnull(timestamp)):
+            date = pd.to_datetime(timestamp)
+            if date.month != month:
+                src1_df= src1_df.drop(index)
+                continue
+            if (not days_list.__contains__(timestamp)):
+                days_list.append(date)
 
     for index,row in src2_df.iterrows():
-        date = row[u'时间']
-        if (not days_list.__contains__(date)) and (pd.notnull(date)):
-            days_list.append(date)
+        timestamp = row[u'时间']
+        if (pd.notnull(timestamp)):
+            date = pd.to_datetime(timestamp)
+            if date.month != month:
+                src2_df= src2_df.drop(index)
+                continue
+            if (not days_list.__contains__(timestamp)):
+                days_list.append(date)
 
     for index,row in pacu_df.iterrows():
-        date = row[u'时间']
-        if (not days_list.__contains__(date)) and (pd.notnull(date)):
-            days_list.append(date)
+        timestamp = row[u'时间']
+        if (pd.notnull(timestamp)):
+            date = pd.to_datetime(timestamp)
+            if date.month != month:
+                pacu_df= pacu_df.drop(index)
+                continue
+            if (not days_list.__contains__(timestamp)):
+                days_list.append(date)
+
 
     pre_handler()
     getDutyInfo()
@@ -592,12 +613,13 @@ if __name__ == '__main__':
     conf = configparser.ConfigParser()
     conf.read("config.ini")
 
+
     src1 = conf.get("path","src1")
     src2 = conf.get("path","src2")
     pacu = conf.get("path","pacu")
     doctors_list = conf.get("path","doctors_list")
 
-    month =  conf.get("config","month")
+    month =  conf.getint("config","month")
 
     subsidies = "科室补贴(新新).xls"
     percentage = "2018.手术提成+(1).xls"
