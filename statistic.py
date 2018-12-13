@@ -8,6 +8,7 @@ import argparse
 import pandas as pd
 import util
 import configparser
+import datetime
 
 reload(sys)
 sys.setdefaultencoding( "utf-8" )
@@ -21,11 +22,13 @@ DOCTOR_ALIAS = {u'刑怡安':u'邢怡安',u'王晓丽':u'王晓莉',u'沈皓':u'
 
 
 DEBUG=1
+DUTY_FILE = "duty.ini"
 doctors_dict = dict()
 menzhen_dict = dict()
 zhiban_dict = dict()
 
-days_list=list()
+days_list=[]
+
 global src1_df, src2_df, pacu_df, doctors_df, month
 
 def read_excel(database):
@@ -41,6 +44,7 @@ def read_csv(database):
     return dframe1
 
 def calculate_oneday_percentage(src1_day_df, src2_day_df,pacu_day_df, perc_df):
+    global menzhen_dict
     #print perc_df
     weichangjing_num = 0
     src1_day_df = util.dataframe_replace(src1_day_df.copy(),[u'麻1（主麻）',u'麻2（副麻）',u'麻3（接班主麻）',u'麻4（接班副麻）'],{u'*':''})
@@ -57,7 +61,7 @@ def calculate_oneday_percentage(src1_day_df, src2_day_df,pacu_day_df, perc_df):
         if op_location == u'胃肠镜全麻':
             weichangjing_num = weichangjing_num +1
             docs = re.split(u'[ ，]', main_doctor)
-            menzhen = menzhen_dict[date]
+            #menzhen = menzhen_dict[date]
             if pd.notnull(assistant_doctor):
                 docs.append(assistant_doctor)
 
@@ -205,9 +209,7 @@ def calculate_percentage():
     huizong_df = pd.DataFrame({u'名字': docs},columns=[u'名字'])
 
     for day in days_list:
-        mytime = pd.to_datetime(day)
-
-        datestr = mytime.day
+        datestr = day.day
 
         src1_day_df = src1_df[src1_df[u"日期"]==day]
         src2_day_df = src2_df[src2_df[u'时间'] == day]
@@ -263,25 +265,26 @@ def src1_check():
         main_doctor = row[u'麻1（主麻）']
         total_doc = []
         if pd.notnull(main_doctor):
-            main_doctor=main_doctor.replace(u'*','')
-            total_doc.extend(re.split(u'[ ，]', main_doctor))
+            li = re.split(u'[ ，]', main_doctor.replace(u'*',''))
+            total_doc.extend(li)
+            if len(li) > 1 and op_location != u'胃肠镜全麻':
+                success = 0
+                print series, "不正确的麻醉人数", op_location
+
         assistant_doctor = row[u'麻2（副麻）']
         if pd.notnull(assistant_doctor):
-            assistant_doctor=assistant_doctor.replace(u'*', '')
-            total_doc.extend(re.split(u'[ ，]', assistant_doctor))
+            #assistant_doctor=assistant_doctor.replace(u'*', '')
+            total_doc.append(assistant_doctor.replace(u'*',''))
         succession_main = row[u'麻3（接班主麻）']
         if pd.notnull(succession_main):
-            succession_main = succession_main.replace(u'*', '')
-            total_doc.extend(re.split(u'[ ，]', succession_main))
+            #succession_main = succession_main.replace(u'*', '')
+            total_doc.append(succession_main.replace(u'*',''))
         succession_assistant = row[u'麻4（接班副麻）']
         if pd.notnull(succession_assistant):
-            succession_assistant = succession_assistant.replace(u'*', '')
-            total_doc.extend(re.split(u'[ ，]', succession_assistant))
+            #succession_assistant = succession_assistant.replace(u'*', '')
+            total_doc.append( succession_assistant.replace(u'*',''))
         has_succession = row[u'是否接班']
 
-        if util.list_dubble_item(total_doc):
-            success = 0
-            print series, "重复的麻醉医生", total_doc
         #空行
         if  pd.isnull(date):
             continue
@@ -289,46 +292,30 @@ def src1_check():
         if op_location not in ALLOW_LOCATION:
             success = 0
             print series,"不知道的手术地点",op_location
+        elif op_location == u'DSA' and op_type != '全麻（插管）':
+            success = 0
+            print series, "DSA", op_type
         #麻醉类型检查
         if pd.notnull(op_type) and (op_type not in ALLOW_OPTPYE):
             success = 0
             print series,"不知道的麻醉类型：", op_type
 
-        #主麻醉医生检查
-        if pd.notnull(main_doctor) and (main_doctor not in doctors_dict.keys()):
-            if op_location == u'胃肠镜全麻':
-                docs = re.split(u'[ ，]', main_doctor)
-                for doc in docs:
-                    if doc not in doctors_dict.keys():
-                        success = 0
-                        print series,"不识别的麻醉医生：", doc
-            elif op_location == u'抢救插管':
-                docs = re.split(u'[ ，]', main_doctor)
-                for doc in docs:
-                    if doc not in doctors_dict.keys():
-                        success = 0
-                        print series, "不识别的麻醉医生：", doc
-            else:
+        if util.list_dubble_item(total_doc):
+            success = 0
+            print series, "重复的麻醉医生", total_doc
+
+        for doc in total_doc:
+            if doc not in doctors_dict.keys():
                 success = 0
-                print series,"不识别的麻醉医生：", main_doctor
-            # 副麻醉医生检查
-        if pd.notnull(assistant_doctor) and (assistant_doctor not in doctors_dict.keys()):
-            success = 0
-            print series,"不识别的麻醉医生：", assistant_doctor
-            #副麻醉医生检查
-        if pd.notnull(succession_main) and (succession_main not in doctors_dict.keys()):
-            success = 0
-            print series,"不识别的麻醉医生：", succession_main
+                print series, "不识别的麻醉医生：", doc
 
-        # 副麻醉医生检查
-        if pd.notnull(succession_assistant) and (succession_assistant not in doctors_dict.keys()):
-            success = 0
-            print series,"不识别的麻醉医生：", succession_assistant
-
-        if  pd.notnull(op_type) and (op_location != u'胃肠镜全麻') and (op_location != u'DSA'):
-            if doctors_dict[main_doctor] == 1 and pd.notnull(assistant_doctor) and doctors_dict[assistant_doctor] == 0:
-                if (main_doctor not in zhiban_dict[date])and (assistant_doctor not in zhiban_dict[date]):
+        if  pd.notnull(op_type) and (op_location != u'胃肠镜全麻') and (op_location != u'DSA')and pd.notnull(assistant_doctor):
+            main_d = main_doctor.replace(u'*','')
+            assistant_d= assistant_doctor.replace(u'*','')
+            if doctors_dict[main_d] == 1  and doctors_dict[assistant_d] == 0:
+                if (main_doctor.find(u'*') < 0)and (assistant_doctor.find(u'*') < 0):
                     print series,"主麻副麻登记错误：",main_doctor, assistant_doctor
+
 
         if has_succession == u'是' and pd.isnull(succession_main) and pd.isnull(succession_assistant):
             success = 0
@@ -435,11 +422,10 @@ def menzhen_check():
     success = 1
     for day in need_menzhen_days:
         if day not in keys:
-            date = pd.to_datetime(day)
-            week = date.weekday()
+            week = day.weekday()
             if week < 5:
                 success = 0
-                print date, "星期%d没有值班医生"%(week+1)
+                print day, "星期%d没有值班医生"%(week+1)
     if success:
         print "门诊值班检查通过"
 
@@ -453,19 +439,13 @@ def database_check():
     res4 = menzhen_check()
 
     if res1 == 0 or res2==0 or res3==0 or res4 == 0:
-        print "数据检查未通过, 输入　N 退出，　Y 继续．．"
-        flag = 1
-        while flag:
-            command = raw_input('>>')
-            if command == 'y' or command=='Y':
-                return
-            elif command == 'n' or command=='N':
-                exit()
-    return
+        return 0
+    else:
+        return 1
 
 #预处理
 def pre_handler():
-    global src1_df, src2_df, pacu_df,zhiban_dict
+    global src1_df, src2_df, pacu_df
 
     print "－－－－预处理－－－－－－"
     print "处理大帐一"
@@ -480,13 +460,29 @@ def pre_handler():
     pacu_df = util.dataframe_replace(pacu_df, [u'复苏人员（出诊人员）'], DOCTOR_ALIAS)
 
 
+    #src1_df = util.dataframe_replace(src1_df,[u'麻1（主麻）',u'麻2（副麻）',u'麻3（接班主麻）',u'麻4（接班副麻）'],{u'*':''})
+    src2_df = util.dataframe_replace(src2_df, [u'麻1', u'麻2', u'麻3', u'麻4',u'麻5'], {u'*':''})
+    pacu_df = util.dataframe_replace(pacu_df, [u'复苏人员（出诊人员）'], {u'*':''})
 
+    return
+
+
+
+#获取值班信息
+def getZhibanInfo():
+    global zhiban_dict
     print '－－－－－获取值班信息－－－'
     for day in days_list:
+        last_dt = day - pd.Timedelta("1 days")
         src1_day_df = src1_df[src1_df[u"日期"] == day]
         src2_day_df = src2_df[src2_df[u'时间'] == day]
         doctorlist = []
         doctors = []
+
+        if zhiban_dict.has_key(last_dt):
+            last_doctors = zhiban_dict[last_dt]
+        else:
+            last_doctors=[]
 
         for index, row in src1_day_df.iterrows():
             main_doctor = row[u'麻1（主麻）']
@@ -528,21 +524,13 @@ def pre_handler():
         for doc in doctors:
             if (u'*' in doc):
                 d = doc.replace(u'*','')
-                if d not in doctorlist:
+                if d not in doctorlist and d not in last_doctors:
                     doctorlist.append(d)
                     str= d+' '+str
         print day, str
         zhiban_dict[day] = doctorlist
 
-    #src1_df = util.dataframe_replace(src1_df,[u'麻1（主麻）',u'麻2（副麻）',u'麻3（接班主麻）',u'麻4（接班副麻）'],{u'*':''})
-    src2_df = util.dataframe_replace(src2_df, [u'麻1', u'麻2', u'麻3', u'麻4',u'麻5'], {u'*':''})
-    pacu_df = util.dataframe_replace(pacu_df, [u'复苏人员（出诊人员）'], {u'*':''})
-
-    return
-
-
-#获取值班信息
-def getDutyInfo():
+def getMenzhenInfo():
     global menzhen_dict
 
     print '－－－－－获取门诊值班信息－－－'
@@ -572,39 +560,76 @@ def main(src1,src2,pacu,doctors_list):
 
     #统计日期
     for index,row in src1_df.iterrows():
-        timestamp = row[u'日期']
-        if (pd.notnull(timestamp)):
-            date = pd.to_datetime(timestamp)
+        date = row[u'日期']
+        if (pd.notnull(date)):
             if date.month != month:
                 src1_df= src1_df.drop(index)
                 continue
-            if (not days_list.__contains__(timestamp)):
+            if (not days_list.__contains__(date)):
                 days_list.append(date)
 
     for index,row in src2_df.iterrows():
-        timestamp = row[u'时间']
-        if (pd.notnull(timestamp)):
-            date = pd.to_datetime(timestamp)
+        date = row[u'时间']
+        if (pd.notnull(date)):
             if date.month != month:
                 src2_df= src2_df.drop(index)
                 continue
-            if (not days_list.__contains__(timestamp)):
+            if (not days_list.__contains__(date)):
                 days_list.append(date)
 
     for index,row in pacu_df.iterrows():
-        timestamp = row[u'时间']
-        if (pd.notnull(timestamp)):
-            date = pd.to_datetime(timestamp)
+        date = row[u'时间']
+        if (pd.notnull(date)):
             if date.month != month:
                 pacu_df= pacu_df.drop(index)
                 continue
-            if (not days_list.__contains__(timestamp)):
+            if (not days_list.__contains__(date)):
                 days_list.append(date)
 
 
     pre_handler()
-    getDutyInfo()
-    database_check()
+    getZhibanInfo()
+    getMenzhenInfo()
+    duty_config = configparser.ConfigParser();
+    duty_config.add_section(u"门诊")
+    duty_config.add_section(u"值班")
+    for date in days_list:
+        if date in menzhen_dict.keys():
+            value = menzhen_dict[date]
+            duty_config.set(u"门诊",date.strftime("%Y-%m-%d"),value=value)
+        if date in zhiban_dict:
+            d_list = zhiban_dict[date]
+            duty_config.set(u"值班", date.strftime("%Y-%m-%d"), value=','.join(d_list))
+
+    duty_config.write(open(DUTY_FILE,"w"))
+    ret = database_check()
+
+    print "\n----------------------------------------------"
+    if ret != 1:
+        print "检查到错误, 请更正信息。。"
+    print "请确认值班信息是否真确，可修改‘ｄuty.ini’改正错误"
+    print"输入　N 退出，　Y 继续．．"
+    while 1:
+        command = raw_input('>>')
+        if command == 'y' or command == 'Y':
+            break
+        elif command == 'n' or command == 'N':
+            exit()
+
+    duty_config.clear()
+    menzhen_dict.clear()
+    zhiban_dict.clear()
+    duty_config.read(DUTY_FILE)
+    for date in days_list:
+        day= date.strftime("%Y-%m-%d")
+        value = duty_config.get(u'门诊',day,fallback=None)
+        if value != None:
+            menzhen_dict[date]= value
+        docs = duty_config.get(u'值班',day,fallback=None)
+        if docs != None:
+            d_list = docs.split(',')
+            zhiban_dict[date] = d_list
+
     calculate_percentage()
     return
 
